@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy.engine import Engine
 
+from churn.build_log import commit_for_path, log_build
 from churn.config import get_engine
 
 SUJET_DIR = Path(__file__).resolve().parents[2] / "sujet"
@@ -31,7 +32,9 @@ def ingest_raw_table(table_name: str, csv_path: Path, engine: Engine) -> int:
 
 def ingest_bronze(engine: Engine | None = None) -> dict[str, int]:
     engine = engine or get_engine()
-    return {
+    stats = {
         table: ingest_raw_table(table, csv_path, engine)
         for table, csv_path in RAW_SOURCES.items()
     }
+    print(log_build(engine, layer="bronze", stats=stats, provenance=commit_for_path("sujet")))
+    return stats
