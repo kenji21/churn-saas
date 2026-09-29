@@ -7,14 +7,24 @@ from scipy.stats import chi2_contingency
 VALEUR_MANQUANTE = "Inconnu"
 
 
-def churn_par_categorie(df: pd.DataFrame, colonne: str) -> tuple[pd.DataFrame, float, float]:
-    """Taux de churn par valeur de `colonne` (NaN regroupés sous "Inconnu") + test d'association chi²."""
+def churn_par_categorie(
+    df: pd.DataFrame, colonne: str, trier_par_categorie: bool = False
+) -> tuple[pd.DataFrame, float, float]:
+    """Taux de churn par valeur de `colonne` (NaN regroupés sous "Inconnu") + test d'association chi².
+
+    Trié par taux de churn décroissant par défaut ; `trier_par_categorie=True` trie par valeur numérique
+    de la catégorie (à utiliser pour une variable ordinale, sinon l'ordre des barres brouille la tendance).
+    """
     categorie = df[colonne].astype("string").fillna(VALEUR_MANQUANTE)
-    stats = (
-        df.groupby(categorie)["churn"]
-        .agg(taux_churn="mean", nb_clients="count")
-        .sort_values("taux_churn", ascending=False)
-    )
+    stats = df.groupby(categorie)["churn"].agg(taux_churn="mean", nb_clients="count")
+    if trier_par_categorie:
+        valeurs = [c for c in stats.index if c != VALEUR_MANQUANTE]
+        ordre = sorted(valeurs, key=float)
+        if VALEUR_MANQUANTE in stats.index:
+            ordre.append(VALEUR_MANQUANTE)
+        stats = stats.loc[ordre]
+    else:
+        stats = stats.sort_values("taux_churn", ascending=False)
     stats["taux_churn_pct"] = (stats["taux_churn"] * 100).round(1)
     assert stats["nb_clients"].sum() == len(df), "somme des groupes != lignes du DataFrame"
 
@@ -25,9 +35,12 @@ def churn_par_categorie(df: pd.DataFrame, colonne: str) -> tuple[pd.DataFrame, f
     return stats, p_value, cramers_v
 
 
-def graphe_churn_par_categorie(df: pd.DataFrame, colonne: str, titre: str) -> None:
-    """Barh du taux de churn par `colonne`, ligne de moyenne globale, p-value/Cramér's V en titre."""
-    stats, p_value, cramers_v = churn_par_categorie(df, colonne)
+def graphe_churn_par_categorie(df: pd.DataFrame, colonne: str, titre: str, trier_par_categorie: bool = False) -> None:
+    """Barh du taux de churn par `colonne`, ligne de moyenne globale, p-value/Cramér's V en titre.
+
+    `trier_par_categorie=True` ordonne les barres par valeur de catégorie (variable ordinale) au lieu du taux de churn.
+    """
+    stats, p_value, cramers_v = churn_par_categorie(df, colonne, trier_par_categorie=trier_par_categorie)
     taux_global = df["churn"].mean() * 100
 
     fig, ax = plt.subplots(figsize=(7, 3.5))
@@ -38,7 +51,8 @@ def graphe_churn_par_categorie(df: pd.DataFrame, colonne: str, titre: str) -> No
         ax.text(pct + 0.3, y, f"{pct:.1f}% (n={nb})", va="center", fontsize=9)
     ax.set_xlabel("Taux de churn (%)")
     ax.set_title(f"{titre}\np-value={p_value:.3f}, Cramér's V={cramers_v:.3f}")
-    ax.invert_yaxis()
+    if not trier_par_categorie:
+        ax.invert_yaxis()
     for spine in ("top", "right"):
         ax.spines[spine].set_visible(False)
     plt.tight_layout()
@@ -95,17 +109,19 @@ def graphe_boxplot_groupe(
     ordre_sous_groupe: list[str],
     titre: str,
 ) -> None:
-    """Boxplot groupé : `colonne_numerique` par `colonne_groupe` (axe X), une boîte par `colonne_sous_groupe`."""
+    """Boxplot groupé : `colonne_numerique` par `colonne_groupe` (axe X), une boîte par `colonne_sous_groupe`, médiane/n en annotation."""
     n_sous = len(ordre_sous_groupe)
     couleurs = ["#3b6fa0", "#c0392b", "#2e7d32", "#8e44ad"][:n_sous]
 
     fig, ax = plt.subplots(figsize=(2.4 * len(ordre_groupe) + 1, 4.5))
     positions_groupes = []
+    boites = []
+    y_max = 1.0
     for gi, groupe in enumerate(ordre_groupe):
         base = gi * (n_sous + 1)
         for si, sous in enumerate(ordre_sous_groupe):
             valeurs = df.loc[(df[colonne_groupe] == groupe) & (df[colonne_sous_groupe] == sous), colonne_numerique].dropna()
-            ax.boxplot(
+            bp = ax.boxplot(
                 [valeurs],
                 positions=[base + si],
                 widths=0.7,
@@ -116,7 +132,27 @@ def graphe_boxplot_groupe(
                 capprops={"color": "#1f3a5f"},
                 flierprops={"markeredgecolor": couleurs[si], "markersize": 3, "alpha": 0.4},
             )
+            boites.append((base + si, valeurs, bp))
+            if len(valeurs):
+                y_max = max(y_max, valeurs.max())
         positions_groupes.append(base + (n_sous - 1) / 2)
+
+    for position, valeurs, bp in boites:
+        if not len(valeurs):
+            continue
+        cap_haut = bp["caps"][1].get_ydata()[0]
+        fliers_haut = bp["fliers"][0].get_ydata()
+        sommet = max(cap_haut, fliers_haut.max() if len(fliers_haut) else cap_haut)
+        ax.text(
+            position,
+            sommet + y_max * 0.03,
+            f"med={valeurs.median():.0f}\nn={len(valeurs)}",
+            ha="center",
+            va="bottom",
+            fontsize=7,
+            color="#1f3a5f",
+        )
+    ax.set_ylim(top=y_max * 1.3)
 
     ax.set_xticks(positions_groupes)
     ax.set_xticklabels(ordre_groupe)

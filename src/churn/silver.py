@@ -23,6 +23,7 @@ STATS_LABELS: dict[str, str] = {
     "taux_adoption_pct_valides": "Lignes validées sur la plage taux_adoption_pct [0, 100]",
     "nb_integrations_imputes": "nb_integrations manquants imputés à 0",
     "delai_reponse_support_h_imputes": "delai_reponse_support_h manquants imputés à 0",
+    "delai_reponse_support_h_valides": "Lignes validées sur la plage delai_reponse_support_h >= 0",
     "fonctionnalites_utilisees_valides": "Lignes validées fonctionnalites_utilisees <= fonctionnalites_total",
     "fonctionnalites_total_valides": "Lignes validées fonctionnalites_total == catalogue",
     "plans_normalized_valides": "Plans distincts (plan_normalized) validés contre le catalogue",
@@ -224,6 +225,7 @@ def build_silver(engine: Engine | None = None) -> tuple[dict[str, int | float], 
     n_nb_integrations_impute = int(df["nb_integrations"].isna().sum())
     df["nb_integrations"] = df["nb_integrations"].fillna(0)
 
+    _valider_plage(df["delai_reponse_support_h"], "delai_reponse_support_h", 0, float("inf"))
     n_delai_impute = int(df["delai_reponse_support_h"].isna().sum())
     df["delai_reponse_support_h"] = df["delai_reponse_support_h"].fillna(0.0)
 
@@ -281,6 +283,7 @@ def build_silver(engine: Engine | None = None) -> tuple[dict[str, int | float], 
         "taux_adoption_pct_valides": n_taux_adoption_valides,
         "nb_integrations_imputes": n_nb_integrations_impute,
         "delai_reponse_support_h_imputes": n_delai_impute,
+        "delai_reponse_support_h_valides": len(df),
         "fonctionnalites_utilisees_valides": n_fonctionnalites_utilisees_valides,
         "fonctionnalites_total_valides": n_fonctionnalites_total_valides,
         "plans_normalized_valides": len(plans_valides),
