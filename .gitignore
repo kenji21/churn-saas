@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .env
-data/
 artifacts/models/*.joblib
 .DS_Store
 churn_saas_certification (# Edit conflict*).ipynb
