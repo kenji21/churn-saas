@@ -16,6 +16,7 @@ dependencies = [
     "typer>=0.12",
     "python-dotenv>=1.0",
     "pyarrow>=25.0.1",
+    "mlflow>=2.16",
 ]
 
 [dependency-groups]
