@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -22,7 +23,12 @@ STATS_LABELS: dict[str, str] = {
     "colonnes_exclues": "Colonnes silver exclues du gold",
     "parquet_exporte": "Artefact parquet écrit (0 si code non commité)",
     "parquet_fichier": "Fichier parquet (nommé par commit, vide si non écrit)",
+    "carte_fichier": "Carte du gold (.md, vide si non écrite)",
 }
+
+# Au-delà de ce nombre de valeurs distinctes, une colonne catégorielle est trop cardinale pour un
+# comptage "NxValeur" lisible dans la carte (ex: client_id) -- on affiche juste son nombre de valeurs.
+_SEUIL_CARDINALITE_CARTE = 20
 
 # Features catégorielles retenues : lien avec le churn confirmé par chi²/Cramér's V dans le notebook
 # (cellules 15, 25, 42, 45 pour plan_normalized/taille_entreprise/commentaire_csm/csat).
@@ -68,22 +74,65 @@ def _taux_utilisation_fonctionnalites(df: pd.DataFrame) -> pd.Series:
     return (df["fonctionnalites_utilisees"] / df["fonctionnalites_total"] * 100).round(2)
 
 
-def export_parquet(df: pd.DataFrame) -> str:
-    """Écrit data/gold_churn_<sha>.parquet, nommé par commit, seulement si src/ est commité (garantit
-    que l'artefact est reproductible depuis un commit git précis, cf `code_diff_stat`), et pointe
-    `PARQUET_SYMLINK` (data/gold_churn.parquet) dessus. Renvoie le nom du fichier écrit, ou "" si
-    l'export a été ignoré (code non commité)."""
+def _resume_colonne(serie: pd.Series) -> str:
+    """Résumé d'une colonne pour la carte gold : moyenne/min/max si numérique (hors booléen), sinon
+    répartition "NxValeur" -- ou juste le nombre de valeurs distinctes au-delà de `_SEUIL_CARDINALITE_CARTE`
+    (ex: identifiant à forte cardinalité, illisible en répartition complète)."""
+    est_numerique = pd.api.types.is_numeric_dtype(serie) and not pd.api.types.is_bool_dtype(serie)
+    if est_numerique:
+        return f"moyenne={serie.mean():.2f}, min={serie.min()}, max={serie.max()}"
+    effectifs = serie.value_counts(dropna=False)
+    if len(effectifs) > _SEUIL_CARDINALITE_CARTE:
+        return f"{serie.nunique(dropna=False)} valeurs distinctes"
+    return ", ".join(f"{n}x {v}" for v, n in effectifs.items())
+
+
+def _carte_gold(df: pd.DataFrame, nom_parquet: str, silver_build: dict[str, object]) -> str:
+    """Carte du gold : commit de code (gold) + commit silver de base, listing des colonnes avec stats."""
+    lignes = [
+        f"# Carte du gold `{nom_parquet}`",
+        "",
+        f"- Lignes : {len(df)}",
+        f"- Commit gold (code qui l'a généré) : `{commit_id()}`",
+        f"- Commit silver (données de base) : `{silver_build['commit_id']}` "
+        f"(build id={silver_build['id']}, built_at={silver_build['built_at']})",
+        "",
+        "## Colonnes",
+        "",
+    ]
+    lignes += [f"- `{col}` : {_resume_colonne(df[col])}" for col in df.columns]
+    return "\n".join(lignes) + "\n"
+
+
+def _ouvrir_dans_vscode(path: Path) -> None:
+    try:
+        subprocess.run(["code", str(path)], check=False)
+    except FileNotFoundError:
+        pass
+
+
+def export_parquet(df: pd.DataFrame, silver_build: dict[str, object]) -> tuple[str, str]:
+    """Écrit data/gold_churn_<sha>.parquet + data/gold_churn_<sha>.md (carte du gold), nommés par
+    commit, seulement si src/ est commité (garantit que l'artefact est reproductible depuis un commit
+    git précis, cf `code_diff_stat`). Pointe `PARQUET_SYMLINK` (data/gold_churn.parquet) sur le parquet
+    et ouvre la carte dans VS Code. Renvoie (nom_parquet, nom_carte), ou ("", "") si ignoré (code dirty)."""
     if code_diff_stat():
-        return ""
+        return "", ""
     PARQUET_DIR.mkdir(parents=True, exist_ok=True)
-    nom_fichier = f"gold_churn_{commit_id()[:8]}.parquet"
+    sha = commit_id()[:8]
+    nom_fichier = f"gold_churn_{sha}.parquet"
     df.to_parquet(PARQUET_DIR / nom_fichier, index=False)
 
     if PARQUET_SYMLINK.is_symlink() or PARQUET_SYMLINK.exists():
         PARQUET_SYMLINK.unlink()
     PARQUET_SYMLINK.symlink_to(nom_fichier)
 
-    return nom_fichier
+    nom_carte = f"gold_churn_{sha}.md"
+    chemin_carte = PARQUET_DIR / nom_carte
+    chemin_carte.write_text(_carte_gold(df, nom_fichier, silver_build), encoding="utf-8")
+    _ouvrir_dans_vscode(chemin_carte)
+
+    return nom_fichier, nom_carte
 
 
 def label_stats(stats: dict[str, int | float | str]) -> dict[str, int | float | str]:
@@ -138,7 +187,7 @@ def build_gold(engine: Engine | None = None) -> tuple[dict[str, int | float | st
     colonnes_silver_exclues = sorted(set(silver.columns) - set(df.columns))
 
     df.to_sql(TARGET_TABLE, engine, if_exists="replace", index=False)
-    parquet_fichier = export_parquet(df)
+    parquet_fichier, carte_fichier = export_parquet(df, silver_build)
 
     stats = {
         "lignes_avant": n_avant,
@@ -147,6 +196,7 @@ def build_gold(engine: Engine | None = None) -> tuple[dict[str, int | float | st
         "colonnes_exclues": len(colonnes_silver_exclues),
         "parquet_exporte": int(bool(parquet_fichier)),
         "parquet_fichier": parquet_fichier,
+        "carte_fichier": carte_fichier,
     }
     log_message = log_build(engine, layer="gold", stats=stats, provenance=silver_build["commit_id"])
     log_message += (
