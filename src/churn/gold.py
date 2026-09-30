@@ -13,6 +13,7 @@ SOURCE_TABLE_PLAN_CATALOGUE = "silver_plan_catalogue"
 TARGET_TABLE = "gold_churn"
 
 PARQUET_DIR = Path(__file__).resolve().parents[2] / "data"
+PARQUET_SYMLINK = PARQUET_DIR / "gold_churn.parquet"
 
 STATS_LABELS: dict[str, str] = {
     "lignes_avant": "Lignes dans silver_churn",
@@ -69,13 +70,19 @@ def _taux_utilisation_fonctionnalites(df: pd.DataFrame) -> pd.Series:
 
 def export_parquet(df: pd.DataFrame) -> str:
     """Écrit data/gold_churn_<sha>.parquet, nommé par commit, seulement si src/ est commité (garantit
-    que l'artefact est reproductible depuis un commit git précis, cf `code_diff_stat`). Renvoie le nom
-    du fichier écrit, ou "" si l'export a été ignoré (code non commité)."""
+    que l'artefact est reproductible depuis un commit git précis, cf `code_diff_stat`), et pointe
+    `PARQUET_SYMLINK` (data/gold_churn.parquet) dessus. Renvoie le nom du fichier écrit, ou "" si
+    l'export a été ignoré (code non commité)."""
     if code_diff_stat():
         return ""
     PARQUET_DIR.mkdir(parents=True, exist_ok=True)
     nom_fichier = f"gold_churn_{commit_id()[:8]}.parquet"
     df.to_parquet(PARQUET_DIR / nom_fichier, index=False)
+
+    if PARQUET_SYMLINK.is_symlink() or PARQUET_SYMLINK.exists():
+        PARQUET_SYMLINK.unlink()
+    PARQUET_SYMLINK.symlink_to(nom_fichier)
+
     return nom_fichier
 
 
