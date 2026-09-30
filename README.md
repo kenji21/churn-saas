@@ -74,26 +74,16 @@ flowchart LR
 
 ### 4. Exploration et sélection des features (vers Gold)
 
-Le notebook [churn_saas_certification.ipynb](churn_saas_certification.ipynb) réalise l'exploration pour décider quelles features intégrer au gold dataset :
+Le notebook [churn_saas_certification.ipynb](churn_saas_certification.ipynb) réalise l'exploration puis documente, dans sa section Gold, le détail feature par feature (conservée / exclue / feature engineering) avec la justification issue de chaque cellule d'EDA — c'est la source de référence pour ces décisions, à ne pas dupliquer ici.
 
-| Feature | Décision | Justification |
-|---|---|---|
-| `pays` | Exclue | V de Cramér ≈ 0 — aucun lien avec le churn |
-| `code_datacenter`, `groupe_experimentation`, `couleur_theme_interface` | Exclues | Aucun signal de corrélation |
-| `jour_souscription`, `date_souscription` | Exclues du gold (présents en silver uniquement) | Redondant / bruit |
-| `plan_normalized` | Conservée | 4 plans, CA réparti — lien fort avec churn |
-| `taille_entreprise` | Conservée | Corrélation forte avec plan et sièges souscrits |
-| `csat` | Conservée | Signal clair : satisfaction faible → churn élevé |
-| `delai_reponse_support_h`, `tickets_support_90j` | Conservées | Délai support long → churn, surtout plans starter/pro |
-| `commentaire_csm` | Conservée (catégoriel) | « Usage en forte baisse ce trimestre » est au-dessus du taux de churn moyen (28 %) |
-| `heures_usage_30j`, `connexions_30j` | Conservées | Clients partis = moins d'usage / connexions |
-| `revenu_mensuel_recurrent_eur` | Cible secondaire | Valeur vie client, pas feature d'entrée |
+Implémentation : [src/churn/gold.py](src/churn/gold.py) (commande CLI `build-gold`), qui écrit la table `gold_churn` en PostgreSQL et un artefact `data/gold_churn.parquet` (non versionné). Les valeurs manquantes restantes (`heures_usage_30j`, `csat`, `retards_paiement_12m`, `revenu_mensuel_recurrent_eur`) ne sont volontairement pas imputées ici : l'imputation statistique doit s'exécuter après le split train/test pour éviter la fuite de données. L'encodage des variables catégorielles (`plan_normalized`, `taille_entreprise`, `commentaire_csm`) est également repoussé au pipeline d'entraînement, pour la même raison et parce que le choix (one-hot, catégoriel natif...) dépend de l'algorithme.
 
 ```mermaid
 flowchart LR
     SILVER["silver_churn<br/>5000 lignes, ~25 colonnes"] --> EXPL[Exploration<br/>boxplots, heatmaps,<br/>churn par catégorie]
-    EXPL --> SELEC[Sélection features<br/>exclues: pays, datacenter,<br/>theme, groupe_exp]
-    SELEC --> GOLD["Gold dataset<br/>features ciblées pour training"]
+    EXPL --> SELEC[Sélection features<br/>exclues: pays, secteur, datacenter,<br/>theme, groupe_exp, valeur_vie_client]
+    SELEC --> FE[Feature engineering<br/>taux_utilisation_fonctionnalites_pct]
+    FE --> GOLD["gold_churn<br/>table + data/gold_churn.parquet"]
 ```
 
 ---

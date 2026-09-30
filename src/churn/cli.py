@@ -4,6 +4,9 @@ import typer
 
 from churn.build_log import cleanup_dirty
 from churn.config import get_engine
+from churn.gold import TARGET_TABLE as GOLD_TARGET_TABLE
+from churn.gold import build_gold
+from churn.gold import format_stats as format_gold_stats
 from churn.ingest import RAW_SOURCES, ingest_bronze
 from churn.silver import TARGET_TABLE, TARGET_TABLE_PLAN_CATALOGUE, build_silver, format_stats
 
@@ -12,6 +15,7 @@ app = typer.Typer(add_completion=False)
 _LAYER_TABLES: dict[str, tuple[str, ...]] = {
     "bronze": tuple(RAW_SOURCES.keys()),
     "silver": (TARGET_TABLE, TARGET_TABLE_PLAN_CATALOGUE),
+    "gold": (GOLD_TARGET_TABLE,),
 }
 
 
@@ -33,6 +37,14 @@ def build_silver_command() -> None:
     stats, log_message = build_silver()
     typer.echo(log_message)
     typer.echo(format_stats(stats))
+
+
+@app.command("build-gold")
+def build_gold_command() -> None:
+    """Sélectionne/enrichit les features de silver_churn et écrit gold_churn (table + parquet)."""
+    stats, log_message = build_gold()
+    typer.echo(log_message)
+    typer.echo(format_gold_stats(stats))
 
 
 @app.command("dirty-cleanup")
