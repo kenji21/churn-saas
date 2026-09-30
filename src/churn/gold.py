@@ -93,8 +93,21 @@ def format_stats(stats: dict[str, int | float | str]) -> str:
 
 def build_gold(engine: Engine | None = None) -> tuple[dict[str, int | float | str], str]:
     """Charge silver_churn/silver_plan_catalogue, sélectionne/enrichit les features validées à l'exploration,
-    écrit gold_churn (table PostgreSQL + artefact parquet)."""
+    écrit gold_churn (table PostgreSQL + artefact parquet).
+
+    Refuse de construire le gold si le dernier build silver n'est pas reproductible (absent ou dirty) :
+    le gold hériterait sinon d'une donnée de base qu'on ne peut pas retracer à un commit git précis."""
     engine = engine or get_engine()
+    silver_build = last_build(engine, "silver")
+    if silver_build is None:
+        raise RuntimeError("Aucun build silver dans build_log -- lancez build-silver avant build-gold.")
+    if silver_build["dirty"]:
+        raise RuntimeError(
+            f"Dernier build silver (id={silver_build['id']}, commit={silver_build['commit_id'][:8]}) "
+            "non reproductible : code non commité sous src/ au moment du build. Committez, relancez "
+            "build-silver depuis un état propre, puis build-gold."
+        )
+
     silver = pd.read_sql_table(SOURCE_TABLE, engine)
     catalogue = pd.read_sql_table(SOURCE_TABLE_PLAN_CATALOGUE, engine)
 
@@ -128,14 +141,11 @@ def build_gold(engine: Engine | None = None) -> tuple[dict[str, int | float | st
         "parquet_exporte": int(bool(parquet_fichier)),
         "parquet_fichier": parquet_fichier,
     }
-    silver_build = last_build(engine, "silver")
-    log_message = log_build(engine, layer="gold", stats=stats, provenance=silver_build["commit_id"] if silver_build else None)
-    if silver_build:
-        suffixe_dirty = "-dirty" if silver_build["dirty"] else ""
-        log_message += (
-            f"\nsilver de base : id={silver_build['id']}, built_at={silver_build['built_at']}, "
-            f"commit={silver_build['commit_id'][:8]}{suffixe_dirty}"
-        )
+    log_message = log_build(engine, layer="gold", stats=stats, provenance=silver_build["commit_id"])
+    log_message += (
+        f"\nsilver de base : id={silver_build['id']}, built_at={silver_build['built_at']}, "
+        f"commit={silver_build['commit_id'][:8]}"
+    )
     if not parquet_fichier:
         log_message += (
             "\n⚠️ Warning : artefact parquet non écrit -- code non commité sous src/, "
