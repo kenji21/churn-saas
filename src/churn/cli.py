@@ -9,6 +9,7 @@ from churn.gold import build_gold
 from churn.gold import format_stats as format_gold_stats
 from churn.ingest import RAW_SOURCES, ingest_bronze
 from churn.silver import TARGET_TABLE, TARGET_TABLE_PLAN_CATALOGUE, build_silver, format_stats
+from churn.train import charger_split, train_random_forest_baseline, train_reg_log_baseline, train_xgboost_baseline
 
 app = typer.Typer(add_completion=False)
 
@@ -45,6 +46,30 @@ def build_gold_command() -> None:
     stats, log_message = build_gold()
     typer.echo(log_message)
     typer.echo(format_gold_stats(stats))
+
+
+@app.command("reg-log-baseline")
+def reg_log_baseline_command() -> None:
+    """Baseline regression logistique sur le gold (split 80/20 stratifie), tracking MLflow (experiment churn_saas)."""
+    train, val, gold_sha = charger_split()
+    _, log_message = train_reg_log_baseline(train, val, gold_sha)
+    typer.echo(log_message)
+
+
+@app.command("random-forest-baseline")
+def random_forest_baseline_command() -> None:
+    """Baseline Random Forest sur le gold (split 80/20 stratifie), tracking MLflow (experiment churn_saas)."""
+    train, val, gold_sha = charger_split()
+    _, log_message = train_random_forest_baseline(train, val, gold_sha)
+    typer.echo(log_message)
+
+
+@app.command("xgboost-baseline")
+def xgboost_baseline_command() -> None:
+    """Baseline XGBoost sur le gold (split 80/20 stratifie), tracking MLflow (experiment churn_saas)."""
+    train, val, gold_sha = charger_split()
+    _, log_message = train_xgboost_baseline(train, val, gold_sha)
+    typer.echo(log_message)
 
 
 @app.command("dirty-cleanup")
