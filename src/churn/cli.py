@@ -9,7 +9,15 @@ from churn.gold import build_gold
 from churn.gold import format_stats as format_gold_stats
 from churn.ingest import RAW_SOURCES, ingest_bronze
 from churn.silver import TARGET_TABLE, TARGET_TABLE_PLAN_CATALOGUE, build_silver, format_stats
-from churn.train import charger_split, train_random_forest_baseline, train_reg_log_baseline, train_xgboost_baseline
+from churn.train import (
+    charger_split,
+    train_random_forest_baseline,
+    train_random_forest_ordinal_baseline,
+    train_reg_log_baseline,
+    train_xgboost_baseline,
+    tuner_random_forest,
+    tuner_xgboost,
+)
 
 app = typer.Typer(add_completion=False)
 
@@ -64,11 +72,37 @@ def random_forest_baseline_command() -> None:
     typer.echo(log_message)
 
 
+@app.command("random-forest-ordinal-baseline")
+def random_forest_ordinal_baseline_command() -> None:
+    """Random Forest avec OrdinalEncoder sur commentaire_csm (au lieu d'OneHot), tracking MLflow (experiment churn_saas)."""
+    train, val, gold_sha = charger_split()
+    _, log_message = train_random_forest_ordinal_baseline(train, val, gold_sha)
+    typer.echo(log_message)
+
+
+@app.command("random-forest-tune")
+def random_forest_tune_command(n_trials: int = 50) -> None:
+    """Recherche d'hyperparametres Optuna pour Random Forest (encodage de commentaire_csm inclus
+    dans la recherche), tracking MLflow (experiment churn_saas, un run imbrique par essai)."""
+    train, val, gold_sha = charger_split()
+    _, log_message = tuner_random_forest(train, val, gold_sha, n_trials=n_trials)
+    typer.echo(log_message)
+
+
 @app.command("xgboost-baseline")
 def xgboost_baseline_command() -> None:
     """Baseline XGBoost sur le gold (split 80/20 stratifie), tracking MLflow (experiment churn_saas)."""
     train, val, gold_sha = charger_split()
     _, log_message = train_xgboost_baseline(train, val, gold_sha)
+    typer.echo(log_message)
+
+
+@app.command("xgboost-tune")
+def xgboost_tune_command(n_trials: int = 50) -> None:
+    """Recherche d'hyperparametres Optuna pour XGBoost, tracking MLflow (experiment churn_saas, un
+    run imbrique par essai)."""
+    train, val, gold_sha = charger_split()
+    _, log_message = tuner_xgboost(train, val, gold_sha, n_trials=n_trials)
     typer.echo(log_message)
 
 

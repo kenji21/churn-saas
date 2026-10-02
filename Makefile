@@ -1,4 +1,7 @@
-.PHONY: bronze silver reg-log-baseline random-forest-baseline xgboost-baseline dirty-cleanup
+.PHONY: bronze silver reg-log-baseline random-forest-baseline random-forest-ordinal-baseline random-forest-tune xgboost-baseline xgboost-tune mlflow-ui dirty-cleanup
+
+MLFLOW_HOST := 127.0.0.1
+MLFLOW_PORT := 5000
 
 bronze:
 	uv run python -m churn.cli ingest-bronze
@@ -12,8 +15,21 @@ reg-log-baseline:
 random-forest-baseline:
 	uv run python -m churn.cli random-forest-baseline
 
+random-forest-ordinal-baseline:
+	uv run python -m churn.cli random-forest-ordinal-baseline
+
+random-forest-tune:
+	uv run python -m churn.cli random-forest-tune
+
 xgboost-baseline:
 	uv run python -m churn.cli xgboost-baseline
+
+xgboost-tune:
+	uv run python -m churn.cli xgboost-tune
+
+mlflow-ui:
+	@if [ "$$(uname)" = "Darwin" ]; then (sleep 1 && open http://$(MLFLOW_HOST):$(MLFLOW_PORT)) & fi
+	uv run mlflow ui --backend-store-uri sqlite:///data/mlflow.db --host $(MLFLOW_HOST) --port $(MLFLOW_PORT)
 
 dirty-cleanup:
 	uv run python -m churn.cli dirty-cleanup
