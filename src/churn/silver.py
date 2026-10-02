@@ -5,6 +5,7 @@ import re
 import pandas as pd
 from sqlalchemy.engine import Engine
 
+from churn import regles
 from churn.build_log import last_build, log_build
 from churn.config import get_engine
 
@@ -36,7 +37,6 @@ STATS_LABELS: dict[str, str] = {
 }
 
 _TITLE_CASE_COLUMNS = ("secteur",)
-_UPPER_CASE_COLUMNS = ("taille_entreprise",)
 _STRIP_ONLY_COLUMNS = ("pays",)
 _DROP_COLUMNS = (
     "source_row_number",
@@ -47,24 +47,6 @@ _DROP_COLUMNS = (
     "couleur_theme_interface",
     "code_datacenter",
     "groupe_experimentation",
-)
-
-_COMMENTAIRES_CSM_CONNUS = frozenset(
-    {
-        "Client insatisfait, risque de départ.",
-        "Client très satisfait et actif.",
-        "Compte dans la moyenne.",
-        "Compte engagé, ambassadeur potentiel.",
-        "Compte peu actif, relance nécessaire.",
-        "Déploiement interne limité.",
-        "Faible adoption des sièges.",
-        "Multiples tickets ouverts, friction élevée.",
-        "Mécontentement exprimé au support.",
-        "RAS.",
-        "Suivi standard.",
-        "Support très sollicité récemment.",
-        "Usage en forte baisse ce trimestre.",
-    }
 )
 
 _CATALOGUE_INT_COLUMNS = (
@@ -92,8 +74,6 @@ _INT_COLUMNS = (
 )
 _FLOAT_COLUMNS = ("taux_adoption_pct", "heures_usage_30j", "revenu_mensuel_recurrent_eur", "delai_reponse_support_h")
 
-_NUMERIC_SUFFIX_RE = re.compile(r"[€%hH]")
-
 _JOURS_SEMAINE = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 _DATE_FORMATS: dict[re.Pattern[str], str] = {
@@ -108,8 +88,7 @@ def _blank_to_na(series: pd.Series) -> pd.Series:
 
 
 def _snake_case(series: pd.Series) -> pd.Series:
-    cleaned = _blank_to_na(series.str.strip()).str.lower()
-    return cleaned.str.replace(r"\s+", "_", regex=True)
+    return _blank_to_na(series.str.strip()).map(regles.normaliser_plan, na_action="ignore")
 
 
 def _to_bool_oui_non(series: pd.Series) -> pd.Series:
@@ -119,13 +98,6 @@ def _to_bool_oui_non(series: pd.Series) -> pd.Series:
     if len(inconnues):
         raise ValueError(f"Valeurs support_dedie hors Oui/Non : {inconnues.tolist()}")
     return cleaned.map(_OUI_NON).astype("boolean")
-
-
-def _clean_numeric(series: pd.Series) -> pd.Series:
-    cleaned = series.str.strip()
-    cleaned = cleaned.str.replace(_NUMERIC_SUFFIX_RE, "", regex=True).str.strip()
-    cleaned = cleaned.str.replace(",", ".", regex=False)
-    return pd.to_numeric(_blank_to_na(cleaned), errors="raise")
 
 
 def _parse_dates(series: pd.Series) -> pd.Series:
@@ -189,8 +161,12 @@ def build_silver(engine: Engine | None = None) -> tuple[dict[str, int | float], 
 
     for col in _TITLE_CASE_COLUMNS:
         df[col] = _blank_to_na(df[col].str.strip()).str.title()
-    for col in _UPPER_CASE_COLUMNS:
-        df[col] = _blank_to_na(df[col].str.strip()).str.upper()
+    df["taille_entreprise"] = _blank_to_na(df["taille_entreprise"].str.strip()).map(
+        regles.normaliser_taille_entreprise, na_action="ignore"
+    )
+    tailles_inconnues = set(df["taille_entreprise"].dropna()) - regles.TAILLES_ENTREPRISE_CONNUES
+    if tailles_inconnues:
+        raise ValueError(f"taille_entreprise hors des valeurs connues : {sorted(tailles_inconnues)}")
     for col in _STRIP_ONLY_COLUMNS:
         df[col] = _blank_to_na(df[col].str.strip())
 
@@ -211,23 +187,24 @@ def build_silver(engine: Engine | None = None) -> tuple[dict[str, int | float], 
         raise ValueError(f"plan_normalized absents du catalogue : {sorted(plans_inconnus)}")
 
     for col in _FLOAT_COLUMNS:
-        df[col] = _clean_numeric(df[col])
+        df[col] = regles.nombre_depuis_texte(df[col])
     for col in _INT_COLUMNS:
         df[col] = pd.to_numeric(_blank_to_na(df[col]), errors="raise").astype("Int64")
     df["churn"] = pd.to_numeric(_blank_to_na(df["churn"]), errors="raise").astype("Int64").astype("boolean")
 
     n_taux_adoption_impute = int(df["taux_adoption_pct"].isna().sum())
-    taux_calcule = df["utilisateurs_actifs"].astype("float64") / df["sieges_souscrits"].astype("float64") * 100
-    df["taux_adoption_pct"] = df["taux_adoption_pct"].fillna(taux_calcule)
-    _valider_plage(df["taux_adoption_pct"], "taux_adoption_pct", 0, 100)
-    n_taux_adoption_valides = len(df)
-
     n_nb_integrations_impute = int(df["nb_integrations"].isna().sum())
-    df["nb_integrations"] = df["nb_integrations"].fillna(0)
-
-    _valider_plage(df["delai_reponse_support_h"], "delai_reponse_support_h", 0, float("inf"))
     n_delai_impute = int(df["delai_reponse_support_h"].isna().sum())
-    df["delai_reponse_support_h"] = df["delai_reponse_support_h"].fillna(0.0)
+    df = regles.completer_valeurs_absentes(df)
+
+    for col, (minimum, maximum) in regles.PLAGES.items():
+        _valider_plage(
+            df[col],
+            col,
+            minimum if minimum is not None else float("-inf"),
+            maximum if maximum is not None else float("inf"),
+        )
+    n_taux_adoption_valides = len(df)
 
     fonctionnalites_invalides = df["fonctionnalites_utilisees"] > df["fonctionnalites_total"]
     if fonctionnalites_invalides.any():
@@ -246,9 +223,7 @@ def build_silver(engine: Engine | None = None) -> tuple[dict[str, int | float], 
         )
     n_fonctionnalites_total_valides = len(df)
 
-    _valider_plage(df["csat"], "csat", 1, 5)
     n_csat_valides = len(df)
-    _valider_plage(df["sante_compte_fin_periode"], "sante_compte_fin_periode", 0, 100)
     n_sante_compte_valides = len(df)
 
     utilisateurs_invalides = df["utilisateurs_actifs"] > df["sieges_souscrits"]
@@ -262,12 +237,14 @@ def build_silver(engine: Engine | None = None) -> tuple[dict[str, int | float], 
     n_commentaire_csm_manquants = int(commentaire_csm_strip.isna().sum())
 
     commentaires_renseignes = commentaire_csm_strip.dropna()
-    commentaires_inconnus = commentaires_renseignes[~commentaires_renseignes.isin(_COMMENTAIRES_CSM_CONNUS)].unique()
+    commentaires_inconnus = commentaires_renseignes[
+        ~commentaires_renseignes.isin(regles.COMMENTAIRES_CSM_CONNUS)
+    ].unique()
     if len(commentaires_inconnus):
         raise ValueError(f"commentaire_csm hors des 13 valeurs connues : {commentaires_inconnus.tolist()[:5]}")
     n_commentaire_csm_valides = len(df)
 
-    df["commentaire_csm"] = commentaire_csm_strip.fillna("n/a")
+    df["commentaire_csm"] = commentaire_csm_strip.fillna(regles.COMMENTAIRE_CSM_ABSENT)
 
     df = df.drop(columns=list(_DROP_COLUMNS), errors="ignore")
 

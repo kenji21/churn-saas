@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy.engine import Engine
 
+from churn import regles
 from churn.build_log import code_diff_stat, commit_id, last_build, log_build
 from churn.config import get_engine
 
@@ -68,17 +69,6 @@ _IDENTIFIER = "client_id"
 # support_dedie_from_plan (feature engineering, jointure silver_plan_catalogue sur plan_normalized) :
 # fonction déterministe de plan_normalized (business/enterprise -> Oui, starter/pro -> Non, cf notebook
 # cellule 57), donc redondante une fois plan_normalized encodé -- conservée à la demande explicite du candidat.
-
-
-def _taux_utilisation_fonctionnalites(df: pd.DataFrame) -> pd.Series:
-    return (df["fonctionnalites_utilisees"] / df["fonctionnalites_total"] * 100).round(2)
-
-
-def _delai_support_x_non_adoption(df: pd.DataFrame) -> pd.Series:
-    """Interaction proposee en cellule 80 du notebook : un delai support long pese plus lourd quand
-    l'adoption est faible. (100 - adoption) pour que les deux termes aillent dans le sens du churn --
-    une regression logistique, additive, ne capte pas cette interaction seule."""
-    return (df["delai_reponse_support_h"] * (100 - df["taux_adoption_pct"])).round(2)
 
 
 def _resume_colonne(serie: pd.Series) -> str:
@@ -176,10 +166,7 @@ def build_gold(engine: Engine | None = None) -> tuple[dict[str, int | float | st
 
     n_avant = len(silver)
 
-    df = silver.merge(catalogue[["plan_normalized", "support_dedie"]], on="plan_normalized", how="left")
-    df = df.rename(columns={"support_dedie": "support_dedie_from_plan"})
-    df["taux_utilisation_fonctionnalites_pct"] = _taux_utilisation_fonctionnalites(df)
-    df["delai_support_x_non_adoption"] = _delai_support_x_non_adoption(df)
+    df = regles.ajouter_features_derivees(silver, catalogue)
 
     colonnes = [
         _IDENTIFIER,

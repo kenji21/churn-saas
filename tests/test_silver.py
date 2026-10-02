@@ -3,9 +3,9 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from churn.regles import nombre_depuis_texte
 from churn.silver import (
     _blank_to_na,
-    _clean_numeric,
     _concordance_jour_souscription,
     _parse_dates,
     _snake_case,
@@ -32,13 +32,13 @@ def test_blank_to_na_convertit_uniquement_les_chaines_vides() -> None:
         ("31,8 h", 31.8),
     ],
 )
-def test_clean_numeric_formats_reels_du_csv(brut: str, attendu: float) -> None:
-    result = _clean_numeric(pd.Series([brut]))
+def test_nombre_depuis_texte_formats_reels_du_csv(brut: str, attendu: float) -> None:
+    result = nombre_depuis_texte(pd.Series([brut]))
     assert result.iloc[0] == pytest.approx(attendu)
 
 
-def test_clean_numeric_chaine_vide_devient_na() -> None:
-    result = _clean_numeric(pd.Series(["12.5", ""]))
+def test_nombre_depuis_texte_chaine_vide_devient_na() -> None:
+    result = nombre_depuis_texte(pd.Series(["12.5", ""]))
     assert result.iloc[1] is pd.NA or pd.isna(result.iloc[1])
 
 
