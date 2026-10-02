@@ -17,7 +17,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 from xgboost import XGBClassifier
 
-from churn.gold import PARQUET_SYMLINK
+from churn.gold import PARQUET_DIR, PARQUET_SYMLINK
 
 MLFLOW_TRACKING_URI = "sqlite:///data/mlflow.db"
 MLFLOW_EXPERIMENT = "churn_saas"
@@ -53,11 +53,16 @@ _COLONNES_EXCLUES: dict[str, str] = {
 }
 
 
-def charger_split(random_state: int = 42, test_size: float = 0.2) -> tuple[pd.DataFrame, pd.DataFrame, str]:
+def charger_split(
+    fichier_parquet: str | None = None, random_state: int = 42, test_size: float = 0.2
+) -> tuple[pd.DataFrame, pd.DataFrame, str]:
     """Charge le gold depuis le .parquet pinne par commit (immuable, contrairement a la table gold_churn
-    reecrite a chaque build_gold), split train/validation stratifie sur churn."""
-    gold_sha = PARQUET_SYMLINK.resolve().stem.removeprefix("gold_churn_")
-    gold_churn = pd.read_parquet(PARQUET_SYMLINK)
+    reecrite a chaque build_gold), split train/validation stratifie sur churn. fichier_parquet
+    (ex: "gold_churn_0764d46b.parquet", sous data/) rend explicite le gold utilise ; par defaut,
+    celui pointe par le lien data/gold_churn.parquet."""
+    chemin = PARQUET_DIR / fichier_parquet if fichier_parquet else PARQUET_SYMLINK
+    gold_sha = chemin.resolve().stem.removeprefix("gold_churn_")
+    gold_churn = pd.read_parquet(chemin)
     train, val = train_test_split(
         gold_churn, test_size=test_size, stratify=gold_churn[_TARGET], random_state=random_state
     )
@@ -191,7 +196,7 @@ def _entrainer_et_logger(
         params = modele.named_steps["estimateur"].get_params()
 
         mlflow.set_tag("gold_commit", gold_sha)
-        mlflow.log_param("gold_parquet", PARQUET_SYMLINK.resolve().name)
+        mlflow.log_param("gold_parquet", f"gold_churn_{gold_sha}.parquet")
         mlflow.log_params(params)
 
         modele.fit(X_train, y_train)
@@ -217,7 +222,7 @@ def _entrainer_et_logger(
         }
         log_message = "\n".join(
             [
-                f"gold     : {gold_sha} ({PARQUET_SYMLINK.resolve().name})",
+                f"gold     : {gold_sha} (gold_churn_{gold_sha}.parquet)",
                 "",
                 decrire_features(encodage_commentaire_csm),
                 "",
