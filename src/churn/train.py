@@ -38,6 +38,7 @@ FEATURES_NUMERIQUES = (
     "csat",
     "retards_paiement_12m",
     "taux_utilisation_fonctionnalites_pct",
+    "delai_support_x_non_adoption",
     "support_dedie_from_plan",
 )
 

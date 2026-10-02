@@ -74,6 +74,13 @@ def _taux_utilisation_fonctionnalites(df: pd.DataFrame) -> pd.Series:
     return (df["fonctionnalites_utilisees"] / df["fonctionnalites_total"] * 100).round(2)
 
 
+def _delai_support_x_non_adoption(df: pd.DataFrame) -> pd.Series:
+    """Interaction proposee en cellule 80 du notebook : un delai support long pese plus lourd quand
+    l'adoption est faible. (100 - adoption) pour que les deux termes aillent dans le sens du churn --
+    une regression logistique, additive, ne capte pas cette interaction seule."""
+    return (df["delai_reponse_support_h"] * (100 - df["taux_adoption_pct"])).round(2)
+
+
 def _resume_colonne(serie: pd.Series) -> str:
     """Résumé d'une colonne pour la carte gold : moyenne/min/max si numérique (hors booléen), sinon
     répartition "NxValeur" -- ou juste le nombre de valeurs distinctes au-delà de `_SEUIL_CARDINALITE_CARTE`
@@ -172,12 +179,14 @@ def build_gold(engine: Engine | None = None) -> tuple[dict[str, int | float | st
     df = silver.merge(catalogue[["plan_normalized", "support_dedie"]], on="plan_normalized", how="left")
     df = df.rename(columns={"support_dedie": "support_dedie_from_plan"})
     df["taux_utilisation_fonctionnalites_pct"] = _taux_utilisation_fonctionnalites(df)
+    df["delai_support_x_non_adoption"] = _delai_support_x_non_adoption(df)
 
     colonnes = [
         _IDENTIFIER,
         *_CATEGORICAL_FEATURES,
         *_NUMERIC_FEATURES,
         "taux_utilisation_fonctionnalites_pct",
+        "delai_support_x_non_adoption",
         "support_dedie_from_plan",
         _SECONDARY_TARGET,
         _TARGET,
