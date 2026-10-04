@@ -48,7 +48,7 @@ _COLONNES_EXCLUES: dict[str, str] = {
     "sante_compte_fin_periode": (
         "fuite -- separe quasi parfaitement les classes (PR-AUC 0.999 avec, 0.746 sans)"
     ),
-    "revenu_mensuel_recurrent_eur": "cible secondaire (valeur vie client), jamais en entree du modele churn",
+    "revenu_mensuel_recurrent_eur": "revenu mensuel (MRR) : entree du modele valeur vie, pas du modele churn",
     _TARGET: "la cible elle-meme",
 }
 
