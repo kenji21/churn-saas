@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 from churn import regles
-from churn.api.schemas import Client, ErreurChamp, Prediction
+from churn.api.schemas import Client, ClientVie, ErreurChamp, Prediction, PredictionVie
 
 
 class EntreeInvalide(Exception):
@@ -58,6 +58,20 @@ def predire(client: Client, artefact: dict[str, Any]) -> Prediction:
         probabilite_churn=round(proba, 4),
         seuil=round(artefact["seuil"], 4),
         alerte=proba >= artefact["seuil"],
+        modele=artefact["nom"],
+        gold=artefact["gold"],
+    )
+
+
+def predire_vie(client: ClientVie, artefact: dict[str, Any]) -> PredictionVie:
+    """Memes features que le churn (meme preparation), plus le MRR brut : le passage au log du MRR et de la
+    cible est dans le pipeline du modele exporte, qui renvoie directement des euros."""
+    features = preparer_features(client, artefact["catalogue"])
+    features["revenu_mensuel_recurrent_eur"] = pd.to_numeric(features["revenu_mensuel_recurrent_eur"])
+    valeur = max(0.0, float(artefact["modele"].predict(features[artefact["colonnes"]])[0]))
+    return PredictionVie(
+        client_id=client.client_id,
+        valeur_vie_client_eur=round(valeur, 2),
         modele=artefact["nom"],
         gold=artefact["gold"],
     )

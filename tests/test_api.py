@@ -50,7 +50,7 @@ def test_prediction_identique_au_modele_applique_a_la_ligne_du_gold(api: TestCli
     gold = pd.read_parquet(PARQUET_DIR / artefact["gold"]).set_index("client_id")
     attendu = artefact["modele"].predict_proba(gold.loc[["CLI-001600"], artefact["colonnes"]])[0, 1]
 
-    reponse = api.post("/prediction", json=CLIENT)
+    reponse = api.post("/api/prediction", json=CLIENT)
 
     assert reponse.status_code == 200, reponse.text
     corps = reponse.json()
@@ -62,7 +62,7 @@ def test_prediction_identique_au_modele_applique_a_la_ligne_du_gold(api: TestCli
 def test_champs_optionnels_absents_acceptes(api: TestClient) -> None:
     optionnels = ("taux_adoption_pct", "heures_usage_30j", "nb_integrations", "delai_reponse_support_h", "csat")
     client = {k: v for k, v in CLIENT.items() if k not in optionnels}
-    assert api.post("/prediction", json=client).status_code == 200
+    assert api.post("/api/prediction", json=client).status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -81,14 +81,49 @@ def test_champs_optionnels_absents_acceptes(api: TestClient) -> None:
     ],
 )
 def test_entree_invalide_renvoie_400_avec_le_champ(api: TestClient, modification: dict, champ: str) -> None:
-    assert _champs_en_erreur(api.post("/prediction", json={**CLIENT, **modification})) == {champ}
+    assert _champs_en_erreur(api.post("/api/prediction", json={**CLIENT, **modification})) == {champ}
 
 
 def test_champ_obligatoire_manquant(api: TestClient) -> None:
     client = {k: v for k, v in CLIENT.items() if k != "plan"}
-    assert _champs_en_erreur(api.post("/prediction", json=client)) == {"plan"}
+    assert _champs_en_erreur(api.post("/api/prediction", json=client)) == {"plan"}
 
 
 def test_plusieurs_erreurs_listees_ensemble(api: TestClient) -> None:
-    reponse = api.post("/prediction", json={**CLIENT, "csat": 0, "taux_adoption_pct": -5, "taille_entreprise": "?"})
+    reponse = api.post("/api/prediction", json={**CLIENT, "csat": 0, "taux_adoption_pct": -5, "taille_entreprise": "?"})
     assert _champs_en_erreur(reponse) == {"csat", "taux_adoption_pct", "taille_entreprise"}
+
+
+def test_prediction_vie_identique_au_modele_applique_a_la_ligne_du_gold(api: TestClient) -> None:
+    """Meme garde-fou que pour le churn : depuis les donnees brutes + le MRR, l'API retrouve la prediction du
+    modele de valeur vie applique a la ligne du gold."""
+    artefact = app.state.artefact_vie
+    gold = pd.read_parquet(PARQUET_DIR / artefact["gold"]).set_index("client_id")
+    attendu = max(0.0, artefact["modele"].predict(gold.loc[["CLI-001600"], artefact["colonnes"]])[0])
+
+    reponse = api.post("/api/prediction_vie", json={**CLIENT, "revenu_mensuel_recurrent_eur": 120.45})
+
+    assert reponse.status_code == 200, reponse.text
+    assert reponse.json()["valeur_vie_client_eur"] == pytest.approx(attendu, abs=0.01)
+    assert reponse.json()["client_id"] == "CLI-001600"
+
+
+def test_modele_vie_decrit_le_modele_servi(api: TestClient) -> None:
+    corps = api.get("/api/modele_vie").json()
+    assert corps["modele"] == app.state.artefact_vie["nom"]
+    assert corps["gold"] == app.state.artefact_vie["gold"]
+
+
+def test_prediction_vie_mrr_absent_accepte(api: TestClient) -> None:
+    assert api.post("/api/prediction_vie", json=CLIENT).status_code == 200
+
+
+def test_prediction_vie_mrr_negatif_refuse(api: TestClient) -> None:
+    reponse = api.post("/api/prediction_vie", json={**CLIENT, "revenu_mensuel_recurrent_eur": -1})
+    assert _champs_en_erreur(reponse) == {"revenu_mensuel_recurrent_eur"}
+
+
+def test_prediction_churn_refuse_le_mrr(api: TestClient) -> None:
+    """Le MRR n'est pas une entree du modele churn : le contrat de /prediction reste strict."""
+    reponse = api.post("/api/prediction", json={**CLIENT, "revenu_mensuel_recurrent_eur": 120.45})
+    assert _champs_en_erreur(reponse) == {"revenu_mensuel_recurrent_eur"}

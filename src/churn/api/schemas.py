@@ -68,11 +68,27 @@ class Client(BaseModel):
         return valeur
 
 
+class ClientVie(Client):
+    """Client + revenu mensuel recurrent : entree du modele de valeur vie client (pas du modele churn, qui ne
+    l'utilise pas). Le MRR est connu au moment de la prediction, c'est le revenu actuel de l'abonnement."""
+
+    revenu_mensuel_recurrent_eur: float | None = Field(
+        default=None, ge=0, examples=[120.45], description="Absent : mediane du train (imputation du modele)"
+    )
+
+
 class Prediction(BaseModel):
     client_id: str | None
     probabilite_churn: float
     seuil: float
     alerte: bool
+    modele: str
+    gold: str
+
+
+class PredictionVie(BaseModel):
+    client_id: str | None
+    valeur_vie_client_eur: float
     modele: str
     gold: str
 

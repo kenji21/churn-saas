@@ -1,7 +1,9 @@
-"""API de prediction du churn : POST /prediction avec les donnees brutes d'un client.
+"""API de prediction, sous /api : POST /api/prediction (churn) et POST /api/prediction_vie (valeur vie client),
+avec les donnees brutes d'un client ; GET /api/modele et /api/modele_vie decrivent les modeles servis.
 
-Lancement : make api (ou uv run uvicorn churn.api.app:app). Le modele servi est CHURN_MODELE s'il est
-defini, sinon le dernier data/modele_champion_*.joblib exporte depuis le notebook (section 10)."""
+Lancement : make api (ou uv run uvicorn churn.api.app:app). Modeles servis : CHURN_MODELE et
+CHURN_MODELE_VIE s'ils sont definis, sinon les derniers data/modele_champion_*.joblib et
+data/modele_vie_*.joblib exportes depuis le notebook (section 10)."""
 
 from __future__ import annotations
 
@@ -11,12 +13,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import joblib
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from churn.api.prediction import EntreeInvalide, predire
-from churn.api.schemas import Client, ErreurChamp, ErreurEntree, Prediction
+from churn.api.prediction import EntreeInvalide, predire, predire_vie
+from churn.api.schemas import Client, ClientVie, ErreurChamp, ErreurEntree, Prediction, PredictionVie
 from churn.gold import PARQUET_DIR
 
 
@@ -29,13 +31,24 @@ def chemin_modele() -> Path:
     return exports[-1]
 
 
+def chemin_modele_vie() -> Path | None:
+    """Optionnel : sans modele de valeur vie exporte, l'API sert le churn et /api/*_vie repondent 503."""
+    if chemin := os.environ.get("CHURN_MODELE_VIE"):
+        return Path(chemin)
+    exports = sorted(PARQUET_DIR.glob("modele_vie_*.joblib"), key=lambda p: p.stat().st_mtime)
+    return exports[-1] if exports else None
+
+
 @asynccontextmanager
 async def _cycle_de_vie(app: FastAPI) -> AsyncIterator[None]:
     app.state.artefact = joblib.load(chemin_modele())
+    chemin_vie = chemin_modele_vie()
+    app.state.artefact_vie = joblib.load(chemin_vie) if chemin_vie else None
     yield
 
 
-app = FastAPI(title="Prediction du churn", lifespan=_cycle_de_vie)
+app = FastAPI(title="Prediction du churn et de la valeur vie client", lifespan=_cycle_de_vie)
+api = APIRouter(prefix="/api")
 
 
 def _reponse_400(erreurs: list[ErreurChamp]) -> JSONResponse:
@@ -60,12 +73,36 @@ async def _entree_invalide(request: Request, exc: EntreeInvalide) -> JSONRespons
     return _reponse_400(exc.erreurs)
 
 
-@app.get("/modele")
+def _artefact_vie(request: Request) -> dict:
+    artefact = request.app.state.artefact_vie
+    if artefact is None:
+        raise HTTPException(503, "Aucun data/modele_vie_*.joblib : exporter le modele depuis le notebook (section 10).")
+    return artefact
+
+
+_AUCUN_MODELE_VIE = {503: {"description": "Aucun modele de valeur vie exporte"}}
+
+
+@api.get("/modele")
 def modele(request: Request) -> dict[str, str | float]:
     artefact = request.app.state.artefact
     return {"modele": artefact["nom"], "gold": artefact["gold"], "seuil": artefact["seuil"], "run_mlflow": artefact["run_mlflow"]}
 
 
-@app.post("/prediction", responses={400: {"model": ErreurEntree}})
+@api.post("/prediction", responses={400: {"model": ErreurEntree}})
 def prediction(client: Client, request: Request) -> Prediction:
     return predire(client, request.app.state.artefact)
+
+
+@api.get("/modele_vie", responses=_AUCUN_MODELE_VIE)
+def modele_vie(request: Request) -> dict[str, str]:
+    artefact = _artefact_vie(request)
+    return {"modele": artefact["nom"], "gold": artefact["gold"], "run_mlflow": artefact["run_mlflow"]}
+
+
+@api.post("/prediction_vie", responses={400: {"model": ErreurEntree}, **_AUCUN_MODELE_VIE})
+def prediction_vie(client: ClientVie, request: Request) -> PredictionVie:
+    return predire_vie(client, _artefact_vie(request))
+
+
+app.include_router(api)

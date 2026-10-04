@@ -21,6 +21,7 @@ dependencies = [
     "optuna>=4.0",
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    "shap>=0.52.0",
 ]
 
 [dependency-groups]

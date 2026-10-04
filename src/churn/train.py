@@ -69,7 +69,13 @@ def charger_split(
     return train, val, gold_sha
 
 
-def construire_pretraitement() -> ColumnTransformer:
+def features_numeriques(gold: pd.DataFrame) -> list[str]:
+    """FEATURES_NUMERIQUES presentes dans ce gold : un gold anterieur a une feature (ex. 4ff8d380, avant
+    delai_support_x_non_adoption) reste entrainable tel qu'a l'epoque, sans elle."""
+    return [f for f in FEATURES_NUMERIQUES if f in gold.columns]
+
+
+def construire_pretraitement(numeriques: list[str] | tuple[str, ...] = FEATURES_NUMERIQUES) -> ColumnTransformer:
     """OneHot sur les categorielles, imputation mediane + normalisation sur les numeriques
     (heures_usage_30j, csat, retards_paiement_12m ont des NaN reels dans le gold)."""
     return ColumnTransformer(
@@ -78,13 +84,15 @@ def construire_pretraitement() -> ColumnTransformer:
             (
                 "numeriques",
                 Pipeline([("imputation", SimpleImputer(strategy="median")), ("normalisation", StandardScaler())]),
-                list(FEATURES_NUMERIQUES),
+                list(numeriques),
             ),
         ]
     )
 
 
-def construire_pretraitement_ordinal() -> ColumnTransformer:
+def construire_pretraitement_ordinal(
+    numeriques: list[str] | tuple[str, ...] = FEATURES_NUMERIQUES,
+) -> ColumnTransformer:
     """Comme construire_pretraitement, mais commentaire_csm (13 categories) passe par un OrdinalEncoder
     plutot qu'un OneHot -- qui diluerait le tirage max_features des arbres (13 dummies pour une seule
     feature, contre 4 pour plan_normalized/taille_entreprise)."""
@@ -99,13 +107,15 @@ def construire_pretraitement_ordinal() -> ColumnTransformer:
             (
                 "numeriques",
                 Pipeline([("imputation", SimpleImputer(strategy="median")), ("normalisation", StandardScaler())]),
-                list(FEATURES_NUMERIQUES),
+                list(numeriques),
             ),
         ]
     )
 
 
-def decrire_features(encodage_commentaire_csm: str = "OneHot") -> str:
+def decrire_features(
+    encodage_commentaire_csm: str = "OneHot", numeriques: list[str] | tuple[str, ...] = FEATURES_NUMERIQUES
+) -> str:
     """Features donnees au modele vs colonnes du gold exclues de l'entrainement (et pourquoi) --
     pour comprendre l'input du gold sans rouvrir le notebook."""
     lignes = [
@@ -115,14 +125,16 @@ def decrire_features(encodage_commentaire_csm: str = "OneHot") -> str:
         f"  - commentaire_csm ({encodage_commentaire_csm})",
     ]
     lignes.append("Features numeriques (imputation mediane + normalisation) :")
-    lignes += [f"  - {f}" for f in FEATURES_NUMERIQUES]
+    lignes += [
+        f"  - {f}" if f in numeriques else f"  - {f} : absente de ce gold, non utilisee" for f in FEATURES_NUMERIQUES
+    ]
     lignes.append("Colonnes du gold exclues de l'entrainement :")
     lignes += [f"  - {col} : {raison}" for col, raison in _COLONNES_EXCLUES.items()]
     return "\n".join(lignes)
 
 
 def _separer_X_y(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
-    colonnes = list(FEATURES_CATEGORIELLES) + list(FEATURES_NUMERIQUES)
+    colonnes = list(FEATURES_CATEGORIELLES) + features_numeriques(df)
     return df[colonnes], df[_TARGET]
 
 
@@ -187,12 +199,15 @@ def _entrainer_et_logger(
     X_train, y_train = _separer_X_y(train)
     X_val, y_val = _separer_X_y(val)
 
-    modele = Pipeline([("pretraitement", pretraitement or construire_pretraitement()), ("estimateur", estimateur)])
+    numeriques = features_numeriques(train)
+    modele = Pipeline(
+        [("pretraitement", pretraitement or construire_pretraitement(numeriques)), ("estimateur", estimateur)]
+    )
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
 
-    with mlflow.start_run(run_name=nom_run):
+    with mlflow.start_run(run_name=nom_run) as run:
         params = modele.named_steps["estimateur"].get_params()
 
         mlflow.set_tag("gold_commit", gold_sha)
@@ -215,6 +230,7 @@ def _entrainer_et_logger(
 
         stats: dict[str, float | str] = {
             "gold_commit": gold_sha,
+            "run_id": run.info.run_id,
             "pr_auc": pr_auc,
             "f1": f1,
             "seuil_f1": seuil,
@@ -223,8 +239,9 @@ def _entrainer_et_logger(
         log_message = "\n".join(
             [
                 f"gold     : {gold_sha} (gold_churn_{gold_sha}.parquet)",
+                f"MLflow   : run {nom_run} ({run.info.run_id}), experience {MLFLOW_EXPERIMENT}",
                 "",
-                decrire_features(encodage_commentaire_csm),
+                decrire_features(encodage_commentaire_csm, numeriques),
                 "",
                 f"params   : {json.dumps(params, indent=2, default=str)}",
                 f"PR-AUC   : {pr_auc:.3f}",
@@ -266,7 +283,7 @@ def train_random_forest_ordinal_baseline(
         gold_sha,
         train,
         val,
-        pretraitement=construire_pretraitement_ordinal(),
+        pretraitement=construire_pretraitement_ordinal(features_numeriques(train)),
         encodage_commentaire_csm="Ordinal",
     )
 
@@ -333,6 +350,7 @@ def tuner_random_forest(
     espace_recherche = espace_recherche or ESPACE_RECHERCHE_RANDOM_FOREST
     X_train, y_train = _separer_X_y(train)
     X_val, y_val = _separer_X_y(val)
+    numeriques = features_numeriques(train)
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment(MLFLOW_EXPERIMENT)
@@ -341,7 +359,11 @@ def tuner_random_forest(
         suggestions = _suggerer_depuis_espace(trial, espace_recherche)
         encodage = suggestions.pop("encodage_commentaire_csm")
         hyperparams = suggestions
-        pretraitement = construire_pretraitement_ordinal() if encodage == "ordinal" else construire_pretraitement()
+        pretraitement = (
+            construire_pretraitement_ordinal(numeriques)
+            if encodage == "ordinal"
+            else construire_pretraitement(numeriques)
+        )
         modele = Pipeline(
             [
                 ("pretraitement", pretraitement),
@@ -377,7 +399,9 @@ def tuner_random_forest(
     description_recherche = _decrire_recherche(study, n_trials, "Random Forest")
 
     pretraitement = (
-        construire_pretraitement_ordinal() if meilleur_encodage == "ordinal" else construire_pretraitement()
+        construire_pretraitement_ordinal(numeriques)
+        if meilleur_encodage == "ordinal"
+        else construire_pretraitement(numeriques)
     )
     estimateur = RandomForestClassifier(random_state=42, n_jobs=-1, **meilleurs_hyperparams)
     stats, log_message = _entrainer_et_logger(
@@ -438,6 +462,7 @@ def tuner_xgboost(
     espace_recherche = espace_recherche or ESPACE_RECHERCHE_XGBOOST
     X_train, y_train = _separer_X_y(train)
     X_val, y_val = _separer_X_y(val)
+    numeriques = features_numeriques(train)
     ratio_classes = (~train[_TARGET]).sum() / train[_TARGET].sum()
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
@@ -451,7 +476,7 @@ def tuner_xgboost(
 
         modele = Pipeline(
             [
-                ("pretraitement", construire_pretraitement()),
+                ("pretraitement", construire_pretraitement(numeriques)),
                 ("estimateur", XGBClassifier(random_state=42, scale_pos_weight=scale_pos_weight, **hyperparams)),
             ]
         )
